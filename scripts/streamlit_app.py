@@ -206,7 +206,7 @@ def sidebar_model_section():
 
     mode = st.sidebar.radio(
         "Mode",
-        ["Single image", "Multiple images (batch)"],
+        ["Single image", "Multiple images (batch)","Webcam Live"],
         index=0,
     )
 
