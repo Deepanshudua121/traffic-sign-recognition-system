@@ -1,6 +1,7 @@
-import streamlit as st
-from scripts.streamlit_app import main as run_app
+from scripts.streamlit_app import run
 
 if __name__ == "__main__":
-    run_app()
+    class Args:
+        model_path = "models/best_model.h5"
 
+    run(Args())
