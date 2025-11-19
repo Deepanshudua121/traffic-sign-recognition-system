@@ -216,11 +216,10 @@ def sidebar_model_section():
 def show_prediction_block(image, top_idx, top_prob, probs, class_names, title_suffix=""):
     col_img, col_info = st.columns([1.2, 1])
 
-  with col_img:
-    # Display image more cleanly (reduce blur in UI)
-    display_img = image.resize((120, 120), Image.LANCZOS)
-    st.image(display_img, caption="Uploaded Image", use_column_width=False)
-
+    with col_img:
+        # Display image at a reasonable size so it does not appear extremely pixelated
+        display_img = image.resize((120, 120), Image.LANCZOS)
+        st.image(display_img, caption="Uploaded Image", use_column_width=False)
 
     with col_info:
         st.subheader(f"🔎 Prediction Result {title_suffix}")
@@ -230,21 +229,14 @@ def show_prediction_block(image, top_idx, top_prob, probs, class_names, title_su
         st.write(f"**Sign Meaning:** {predicted_name}")
         st.write(f"**Confidence:** {top_prob * 100:.2f}%")
 
-        if top_prob < 0.50:
-            st.warning(
-                "The model is not very confident about this prediction "
-                "(confidence < 50%). This can happen if the image is very blurry, "
-                "cropped badly, or the model needs more training."
-            )
-
-        # Top-5 bar chart
+        # Top-5 probabilities chart
         prob_series = pd.Series(
             probs, index=[class_names[i] for i in range(len(probs))]
         )
         top5 = prob_series.sort_values(ascending=False).head(5)
-
         st.markdown("**Top-5 probabilities:**")
         st.bar_chart(top5)
+
 
 
 def page_single_image(model, class_names):
