@@ -1,100 +1,362 @@
 import streamlit as st
 import numpy as np
-import tensorflow as tf
+import pandas as pd
+from pathlib import Path
 from PIL import Image
+import tensorflow as tf
+import io
 
-# -----------------------------
-# Load model only once (caching)
-# -----------------------------
+# ---------------------------------------------------------
+# Paths & Config
+# ---------------------------------------------------------
+ROOT_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_MODEL_PATH = ROOT_DIR / "models" / "best_model.h5"
+META_DIR = ROOT_DIR / "data" / "Meta"
+
+
+# ---------------------------------------------------------
+# Utilities: model & class names
+# ---------------------------------------------------------
 @st.cache_resource
-def load_model():
-    model = tf.keras.models.load_model("models/best_model.h5")
+def load_model(model_path: Path):
+    """Load Keras model once (cached)."""
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model file not found at: {model_path}")
+    model = tf.keras.models.load_model(model_path)
     return model
 
-# -----------------------------
-# Class labels for predictions
-# -----------------------------
-CLASS_LABELS = {
-    0: "Speed limit (20km/h)",
-    1: "Speed limit (30km/h)",
-    2: "Speed limit (50km/h)",
-    3: "Speed limit (60km/h)",
-    4: "Speed limit (70km/h)",
-    5: "Speed limit (80km/h)",
-    6: "End of speed limit (80km/h)",
-    7: "Speed limit (100km/h)",
-    8: "Speed limit (120km/h)",
-    9: "No passing",
-    10: "No passing for vehicles over 3.5 tonnes",
-    11: "Right-of-way at intersection",
-    12: "Priority road",
-    13: "Yield",
-    14: "Stop",
-    15: "No vehicles",
-    16: "Vehicles >3.5 tonnes prohibited",
-    17: "No entry",
-    18: "General caution",
-    19: "Dangerous curve left",
-    20: "Dangerous curve right",
-    21: "Double curve",
-    22: "Bumpy road",
-    23: "Slippery road",
-    24: "Road narrows on right",
-    25: "Road work",
-    26: "Traffic signals",
-    27: "Pedestrians",
-    28: "Children crossing",
-    29: "Bicycles crossing",
-    30: "Beware of ice/snow",
-    31: "Wild animals crossing",
-    32: "End of all speed limits",
-    33: "Turn right ahead",
-    34: "Turn left ahead",
-    35: "Ahead only",
-    36: "Go straight or right",
-    37: "Go straight or left",
-    38: "Keep right",
-    39: "Keep left",
-    40: "Roundabout mandatory",
-    41: "End of no-passing zone",
-    42: "End no-passing for >3.5 tonnes"
-}
 
-# -----------------------------
-# Main Streamlit App
-# -----------------------------
+@st.cache_data
+def load_class_mapping(num_classes: int):
+    """
+    Load human-readable class names from CSV in data/Meta if available.
+    Falls back to 'Class 0', 'Class 1', ...
+    """
+    candidate_files = [
+        META_DIR / "signnames.csv",
+        META_DIR / "SignNames.csv",
+        META_DIR / "classes.csv",
+        META_DIR / "Meta.csv",
+    ]
+
+    for meta_file in candidate_files:
+        if meta_file.exists():
+            try:
+                df = pd.read_csv(meta_file)
+
+                # Try to guess the columns
+                class_col, name_col = None, None
+                for col in df.columns:
+                    lc = col.lower()
+                    if "class" in lc or "id" in lc:
+                        class_col = col
+                    if (
+                        "sign" in lc
+                        or "name" in lc
+                        or "label" in lc
+                        or "meaning" in lc
+                    ):
+                        name_col = col
+
+                if class_col is not None and name_col is not None:
+                    mapping = dict(
+                        zip(df[class_col].astype(int), df[name_col].astype(str))
+                    )
+                    return {i: mapping.get(i, f"Class {i}") for i in range(num_classes)}
+            except Exception:
+                pass
+
+    # Fallback
+    return {i: f"Class {i}" for i in range(num_classes)}
+
+
+# ---------------------------------------------------------
+# Preprocessing & prediction
+# ---------------------------------------------------------
+def preprocess_image(image: Image.Image, input_shape):
+    """
+    Resize / normalize image to match model.input_shape: (None, H, W, C)
+    """
+    _, h, w, c = input_shape
+
+    # Convert mode based on channels
+    if c == 1:
+        image = image.convert("L")
+    else:
+        image = image.convert("RGB")
+
+    image = image.resize((w, h))
+
+    arr = np.array(image).astype("float32")
+
+    if c == 1 and arr.ndim == 2:
+        arr = np.expand_dims(arr, axis=-1)
+
+    # Most GTSRB models are trained on [0,1] pixels
+    arr = arr / 255.0
+
+    # Add batch dimension
+    arr = np.expand_dims(arr, axis=0)  # (1, H, W, C)
+
+    return arr
+
+
+def predict_single(model, image: Image.Image, class_names: dict):
+    """
+    Predict for one image. Returns:
+    - top_idx, top_prob, probs (np.array), class_names (dict)
+    """
+    img_array = preprocess_image(image, model.input_shape)
+
+    preds = model.predict(img_array)
+    if preds.ndim == 2:
+        preds = preds[0]
+    elif preds.ndim != 1:
+        raise ValueError(f"Unexpected prediction shape: {preds.shape}")
+
+    probs = tf.nn.softmax(preds).numpy()
+    num_classes = probs.shape[0]
+    # Ensure mapping has all indices
+    class_names = {i: class_names.get(i, f"Class {i}") for i in range(num_classes)}
+
+    top_idx = int(np.argmax(probs))
+    top_prob = float(probs[top_idx])
+
+    return top_idx, top_prob, probs, class_names
+
+
+def predict_batch(model, images, class_names: dict):
+    """
+    Predict for a list of PIL images.
+    Returns probs (N, C) and same class_names.
+    """
+    input_shape = model.input_shape
+    arrays = [preprocess_image(img, input_shape)[0] for img in images]  # strip batch dim
+    batch = np.stack(arrays, axis=0)
+    preds = model.predict(batch)
+
+    if preds.ndim != 2:
+        raise ValueError(f"Unexpected batch prediction shape: {preds.shape}")
+
+    probs = tf.nn.softmax(preds, axis=1).numpy()
+    num_classes = probs.shape[1]
+    class_names = {i: class_names.get(i, f"Class {i}") for i in range(num_classes)}
+    return probs, class_names
+
+
+# ---------------------------------------------------------
+# Streamlit UI
+# ---------------------------------------------------------
+def style_page():
+    st.set_page_config(
+        page_title="Traffic Sign Recognition",
+        page_icon="🚦",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+
+    # Light custom CSS to make it feel less "default Streamlit"
+    st.markdown(
+        """
+        <style>
+        .reportview-container {
+            background: #050816;
+            color: #f5f5f5;
+        }
+        .sidebar .sidebar-content {
+            background: #0b1020;
+        }
+        h1, h2, h3 {
+            color: #ffffff;
+        }
+        .stMetric {
+            background-color: #111827;
+            border-radius: 0.75rem;
+            padding: 0.75rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def sidebar_model_section():
+    st.sidebar.title("⚙️ Model Settings")
+
+    model_path_str = st.sidebar.text_input(
+        "Model path (relative to repo root)",
+        value=str(DEFAULT_MODEL_PATH.relative_to(ROOT_DIR)),
+        help="Default: models/best_model.h5",
+    )
+
+    model_path = (ROOT_DIR / model_path_str).resolve()
+
+    try:
+        model = load_model(model_path)
+    except Exception as e:
+        st.sidebar.error(
+            f"Could not load model from `{model_path}`.\n\nError: {e}"
+        )
+        st.stop()
+
+    num_classes = model.output_shape[-1]
+    class_names = load_class_mapping(num_classes)
+
+    with st.sidebar.expander("Model Info", expanded=False):
+        st.write(f"**Model path:** `{model_path}`")
+        st.write(f"**Input shape:** `{model.input_shape}`")
+        st.write(f"**Output classes:** `{num_classes}`")
+
+    mode = st.sidebar.radio(
+        "Mode",
+        ["Single image", "Multiple images (batch)"],
+        index=0,
+    )
+
+    return model, class_names, mode
+
+
+def show_prediction_block(image, top_idx, top_prob, probs, class_names, title_suffix=""):
+    col_img, col_info = st.columns([1.2, 1])
+
+    with col_img:
+        st.image(image, caption="Uploaded Image", use_column_width=True)
+
+    with col_info:
+        st.subheader(f"🔎 Prediction Result {title_suffix}")
+
+        predicted_name = class_names.get(top_idx, f"Class {top_idx}")
+        st.write(f"**Class Index:** {top_idx}")
+        st.write(f"**Sign Meaning:** {predicted_name}")
+        st.write(f"**Confidence:** {top_prob * 100:.2f}%")
+
+        if top_prob < 0.50:
+            st.warning(
+                "The model is not very confident about this prediction "
+                "(confidence < 50%). This can happen if the image is very blurry, "
+                "cropped badly, or the model needs more training."
+            )
+
+        # Top-5 bar chart
+        prob_series = pd.Series(
+            probs, index=[class_names[i] for i in range(len(probs))]
+        )
+        top5 = prob_series.sort_values(ascending=False).head(5)
+
+        st.markdown("**Top-5 probabilities:**")
+        st.bar_chart(top5)
+
+
+def page_single_image(model, class_names):
+    st.header("🖼 Single Image Prediction")
+
+    st.write(
+        "Upload a traffic sign image (preferably similar to the GTSRB dataset – cropped and not too blurry), "
+        "and the model will classify it."
+    )
+
+    uploaded_file = st.file_uploader(
+        "Upload an image (JPG / PNG)", type=["jpg", "jpeg", "png"]
+    )
+
+    if uploaded_file is not None:
+        image = Image.open(uploaded_file)
+        with st.spinner("Running prediction..."):
+            top_idx, top_prob, probs, class_names = predict_single(
+                model, image, class_names
+            )
+        show_prediction_block(image, top_idx, top_prob, probs, class_names)
+    else:
+        st.info("⬆️ Upload an image to get a prediction.")
+
+
+def page_batch_images(model, class_names):
+    st.header("📦 Batch Prediction (Multiple Images)")
+
+    st.write(
+        "You can upload multiple images at once. The app will run the model on each image "
+        "and show a results table with predicted classes and confidences."
+    )
+
+    files = st.file_uploader(
+        "Upload multiple images", type=["jpg", "jpeg", "png"], accept_multiple_files=True
+    )
+
+    if not files:
+        st.info("⬆️ Upload 2–10 images to see batch predictions.")
+        return
+
+    # Convert files to PIL images
+    images = []
+    names = []
+    for f in files:
+        try:
+            img = Image.open(io.BytesIO(f.read()))
+            images.append(img)
+            names.append(f.name)
+        except Exception:
+            st.error(f"Could not read image file: {f.name}")
+
+    if not images:
+        st.error("No valid images to process.")
+        return
+
+    with st.spinner("Running batch prediction..."):
+        probs, class_names = predict_batch(model, images, class_names)
+
+    top_indices = np.argmax(probs, axis=1)
+    top_probs = probs[np.arange(len(probs)), top_indices]
+
+    rows = []
+    for fname, idx, prob in zip(names, top_indices, top_probs):
+        rows.append(
+            {
+                "File": fname,
+                "Predicted Class ID": int(idx),
+                "Predicted Sign": class_names.get(int(idx), f"Class {int(idx)}"),
+                "Confidence (%)": round(float(prob) * 100, 2),
+            }
+        )
+
+    df = pd.DataFrame(rows)
+
+    st.subheader("Results Table")
+    st.dataframe(df, use_container_width=True)
+
+    avg_conf = df["Confidence (%)"].mean()
+    st.metric("Average confidence across images", f"{avg_conf:.2f} %")
+
+
 def main():
+    style_page()
+
     st.title("🚦 Traffic Sign Recognition System")
-    st.write("Upload a traffic sign image and the model will predict its meaning.")
+    st.caption(
+        "German Traffic Sign Recognition Benchmark (GTSRB) • CNN + Streamlit "
+        "• Single & batch predictions"
+    )
 
-    model = load_model()
+    model, class_names, mode = sidebar_model_section()
 
-    uploaded_file = st.file_uploader("Upload Image", type=["jpg", "png", "jpeg"])
+    if mode == "Single image":
+        page_single_image(model, class_names)
+    else:
+        page_batch_images(model, class_names)
 
-    if uploaded_file:
-        # Show image
-        img = Image.open(uploaded_file)
-        st.image(img, caption="Uploaded Image", use_container_width=True)
-
-        # Preprocess
-        img_resized = img.resize((30, 30))
-        img_array = np.array(img_resized) / 255.0
-        img_array = np.expand_dims(img_array, axis=0)
-
-        # Predict
-        prediction = model.predict(img_array)
-        class_idx = np.argmax(prediction[0])
-        confidence = float(np.max(prediction[0])) * 100
-
-        # Display results
-        st.subheader("🔍 Prediction Result:")
-        st.write(f"**Class Index:** {class_idx}")
-        st.write(f"**Sign Meaning:** {CLASS_LABELS.get(class_idx, 'Unknown Class')}")
-        st.write(f"**Confidence:** {confidence:.2f}%")
-
-    st.info("Model Loaded Successfully ✔")
+    st.markdown("---")
+    with st.expander("ℹ️ Notes on accuracy & wrong predictions"):
+        st.write(
+            """
+            * A wrong prediction with low confidence (like **17%**) usually means the model is **unsure**.
+            * Reasons:
+              - Image is very blurred / noisy / far away.
+              - Sign is partly occluded or not cropped properly.
+              - The model itself may need **more training**, better preprocessing, or augmentation.
+            * If your evaluation on the test set is high (e.g. >95%) but Streamlit predictions look bad,
+              then the problem is usually **input preprocessing** or images very different from training data.
+            """
+        )
 
 
-# Run app
 if __name__ == "__main__":
     main()
