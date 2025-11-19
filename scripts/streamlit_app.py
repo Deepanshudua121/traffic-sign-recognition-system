@@ -319,27 +319,55 @@ def page_batch_images(model, class_names):
 
     avg_conf = df["Confidence (%)"].mean()
     st.metric("Average confidence across images", f"{avg_conf:.2f} %")
+def crop_center(image: Image.Image, crop_factor: float = 0.5) -> Image.Image:
+    """
+    Crop the central square region of the image.
+    crop_factor = 0.5 means keep 50% of width/height from the center.
+    """
+    w, h = image.size
+    side = int(min(w, h) * crop_factor)
+
+    left = (w - side) // 2
+    top = (h - side) // 2
+    right = left + side
+    bottom = top + side
+
+    return image.crop((left, top, right, bottom))
+
 def page_webcam(model, class_names):
     st.header("📷 Live Webcam Traffic Sign Detection")
-
-    st.write("Use your webcam to capture an image and let the model predict the traffic sign.")
+    st.write(
+        "Hold a traffic sign image in the CENTER of the camera, fairly close, "
+        "then click **Capture**."
+    )
 
     img_file = st.camera_input("Click **Capture** to take a picture")
 
     if img_file is not None:
-        image = Image.open(img_file)
+        # Original webcam frame
+        full_image = Image.open(img_file)
 
+        # 🔹 Crop center part where we expect the sign to be
+        cropped = crop_center(full_image, crop_factor=0.6)  # keep central 60%
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.image(full_image, caption="Full webcam frame", use_column_width=True)
+        with col2:
+            st.image(cropped, caption="Cropped region used for prediction", use_column_width=True)
+
+        # 🔹 Predict on the cropped region (looks more like dataset samples)
         with st.spinner("Analyzing..."):
-            top_idx, top_prob, probs, class_names = predict_single(model, image, class_names)
-
-        st.success("Prediction Complete 🎉")
-
-        display_img = image.resize((120, 120), Image.LANCZOS)
-        st.image(display_img, caption="Captured Image", use_column_width=False)
+            top_idx, top_prob, probs, class_names = predict_single(model, cropped, class_names)
 
         predicted_name = class_names.get(top_idx, f"Class {top_idx}")
+
+        st.success("Prediction Complete 🎉")
         st.write(f"**Predicted Sign:** {predicted_name}")
         st.write(f"**Class Index:** {top_idx}")
+        # if you kept confidence hidden, skip the next line
+        st.write(f"**(Optional) Confidence:** {top_prob * 100:.2f}%")
+
 
 
 def main():
