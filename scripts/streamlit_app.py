@@ -216,8 +216,8 @@ def sidebar_model_section():
 def show_prediction_block(image, top_idx, top_prob, probs, class_names, title_suffix=""):
     col_img, col_info = st.columns([1.2, 1])
 
-    with col_img:
-    # Display image at a reasonable size so it doesn't look extremely pixelated
+  with col_img:
+    # Display image more cleanly (reduce blur in UI)
     display_img = image.resize((120, 120), Image.LANCZOS)
     st.image(display_img, caption="Uploaded Image", use_column_width=False)
 
