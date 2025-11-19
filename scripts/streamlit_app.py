@@ -75,30 +75,27 @@ def load_class_mapping(num_classes: int):
 # ---------------------------------------------------------
 def preprocess_image(image: Image.Image, input_shape):
     """
-    Resize / normalize image to match model.input_shape: (None, H, W, C)
+    Make the image look EXACTLY like X_train.npy:
+    - RGB
+    - 30x30 (or whatever the model input is)
+    - pixel values in [0, 255], no normalization
     """
-    _, h, w, c = input_shape
+    _, h, w, c = input_shape  # should be (None, 30, 30, 3)
 
-    # Convert mode based on channels
-    if c == 1:
-        image = image.convert("L")
-    else:
-        image = image.convert("RGB")
+    # Force RGB
+    image = image.convert("RGB")
 
-    image = image.resize((w, h))
+    # Resize to the same size as training data
+    image = image.resize((w, h))  # e.g. (30, 30)
 
-    arr = np.array(image).astype("float32")
+    # Convert to numpy array
+    arr = np.array(image).astype("float32")  # keep 0–255 scale (NO /255.0 here)
 
-    if c == 1 and arr.ndim == 2:
-        arr = np.expand_dims(arr, axis=-1)
-
-    # Most GTSRB models are trained on [0,1] pixels
-    arr = arr / 255.0
-
-    # Add batch dimension
-    arr = np.expand_dims(arr, axis=0)  # (1, H, W, C)
+    # Add batch dimension -> (1, h, w, c)
+    arr = np.expand_dims(arr, axis=0)
 
     return arr
+
 
 
 def predict_single(model, image: Image.Image, class_names: dict):
