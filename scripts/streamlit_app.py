@@ -217,7 +217,10 @@ def show_prediction_block(image, top_idx, top_prob, probs, class_names, title_su
     col_img, col_info = st.columns([1.2, 1])
 
     with col_img:
-        st.image(image, caption="Uploaded Image", use_column_width=True)
+    # Display image at a reasonable size so it doesn't look extremely pixelated
+    display_img = image.resize((120, 120), Image.LANCZOS)
+    st.image(display_img, caption="Uploaded Image", use_column_width=False)
+
 
     with col_info:
         st.subheader(f"🔎 Prediction Result {title_suffix}")
