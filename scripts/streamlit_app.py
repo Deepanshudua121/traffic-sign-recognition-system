@@ -204,13 +204,15 @@ def sidebar_model_section():
         st.write(f"**Input shape:** `{model.input_shape}`")
         st.write(f"**Output classes:** `{num_classes}`")
 
+    # 👇 This is the sidebar menu
     mode = st.sidebar.radio(
         "Mode",
-        ["Single image", "Multiple images (batch)","Webcam Live"],
+        ["Single image", "Multiple images (batch)", "Webcam Live"],
         index=0,
     )
 
     return model, class_names, mode
+
 
 
 def show_prediction_block(image, top_idx, top_prob, probs, class_names, title_suffix=""):
@@ -345,28 +347,27 @@ def main():
 
     st.title("🚦 Traffic Sign Recognition System")
     st.caption(
-        "German Traffic Sign Recognition Benchmark (GTSRB) • CNN + Streamlit "
-        "• Single & batch predictions"
+        "German Traffic Sign Recognition Benchmark (GTSRB) • CNN + Streamlit • "
+        "Single, batch & webcam predictions"
     )
 
+    # Get model, class names and selected mode from sidebar
     model, class_names, mode = sidebar_model_section()
 
+    # 👇 Route to the correct page based on sidebar selection
     if mode == "Single image":
         page_single_image(model, class_names)
-    else:
+    elif mode == "Multiple images (batch)":
         page_batch_images(model, class_names)
+    elif mode == "Webcam Live":
+        page_webcam(model, class_names)
 
     st.markdown("---")
     with st.expander("ℹ️ Notes on accuracy & wrong predictions"):
         st.write(
             """
-            * A wrong prediction with low confidence (like **17%**) usually means the model is **unsure**.
-            * Reasons:
-              - Image is very blurred / noisy / far away.
-              - Sign is partly occluded or not cropped properly.
-              - The model itself may need **more training**, better preprocessing, or augmentation.
-            * If your evaluation on the test set is high (e.g. >95%) but Streamlit predictions look bad,
-              then the problem is usually **input preprocessing** or images very different from training data.
+            * Model test accuracy on GTSRB is around **98–99%** on clean test images.
+            * Very blurred / noisy / far images may produce lower confidence.
             """
         )
 
