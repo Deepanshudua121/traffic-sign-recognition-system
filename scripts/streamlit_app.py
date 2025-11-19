@@ -317,6 +317,27 @@ def page_batch_images(model, class_names):
 
     avg_conf = df["Confidence (%)"].mean()
     st.metric("Average confidence across images", f"{avg_conf:.2f} %")
+def page_webcam(model, class_names):
+    st.header("📷 Live Webcam Traffic Sign Detection")
+
+    st.write("Use your webcam to capture an image and let the model predict the traffic sign.")
+
+    img_file = st.camera_input("Click **Capture** to take a picture")
+
+    if img_file is not None:
+        image = Image.open(img_file)
+
+        with st.spinner("Analyzing..."):
+            top_idx, top_prob, probs, class_names = predict_single(model, image, class_names)
+
+        st.success("Prediction Complete 🎉")
+
+        display_img = image.resize((120, 120), Image.LANCZOS)
+        st.image(display_img, caption="Captured Image", use_column_width=False)
+
+        predicted_name = class_names.get(top_idx, f"Class {top_idx}")
+        st.write(f"**Predicted Sign:** {predicted_name}")
+        st.write(f"**Class Index:** {top_idx}")
 
 
 def main():
